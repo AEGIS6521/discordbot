@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: discordbot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: HUGGING_FACE_TOKEN
+        sync: false
