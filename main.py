@@ -392,7 +392,10 @@ async def chat_command(ctx: commands.Context, *, message: str) -> None:
         await ctx.send(chunk)
 
 
-@bot.command(name="status", aliases=["ステータス", "st", "s"])
+@bot.command(
+    name="status",
+    aliases=["\u30b9\u30c6\u30fc\u30bf\u30b9", "st", "s"],
+)
 async def status_command(ctx: commands.Context) -> None:
     mode = "discord+web" if DISCORD_TOKEN else "web-only"
     hf_state = "ON" if client else "OFF"
@@ -404,7 +407,7 @@ async def status_command(ctx: commands.Context) -> None:
     await ctx.send(
         "\n".join(
             [
-                "稼働中です。",
+                "\u7a3c\u50cd\u4e2d\u3067\u3059\u3002",
                 f"mode: {mode}",
                 f"hf: {hf_state}",
                 f"model: {model}",

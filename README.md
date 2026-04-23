@@ -6,7 +6,7 @@ You can also chat directly in the browser (no Discord client needed).
 ## Commands
 
 - `!c <message>`: chat with the bot
-- `!status` / `!ステータス`: show runtime status
+- `!status`: show runtime status (`!ステータス` alias is also available)
 - `!r`: reset channel memory
 
 ## Web Chat
