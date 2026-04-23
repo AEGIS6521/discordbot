@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import time
 from collections import defaultdict, deque
 from threading import Lock, Thread
 from uuid import uuid4
@@ -22,6 +23,7 @@ HF_MODEL = "openai/gpt-oss-120b:fastest"
 client = InferenceClient(token=HF_TOKEN) if HF_TOKEN else None
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+STARTED_AT = time.monotonic()
 
 MAX_HISTORY = 6
 conversation_history = defaultdict(lambda: deque(maxlen=MAX_HISTORY * 2))
@@ -369,6 +371,13 @@ def fallback_reply() -> str:
     )
 
 
+def format_uptime(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, sec = divmod(rem, 60)
+    return f"{hours:02}:{minutes:02}:{sec:02}"
+
+
 @bot.command(name="c", aliases=["chat"])
 async def chat_command(ctx: commands.Context, *, message: str) -> None:
     memory_key = f"channel:{ctx.channel.id}"
@@ -381,6 +390,29 @@ async def chat_command(ctx: commands.Context, *, message: str) -> None:
 
     for chunk in split_message(reply):
         await ctx.send(chunk)
+
+
+@bot.command(name="status", aliases=["ステータス", "st", "s"])
+async def status_command(ctx: commands.Context) -> None:
+    mode = "discord+web" if DISCORD_TOKEN else "web-only"
+    hf_state = "ON" if client else "OFF"
+    model = HF_MODEL if client else "N/A"
+    uptime = format_uptime(time.monotonic() - STARTED_AT)
+    with history_lock:
+        sessions = len(conversation_history)
+
+    await ctx.send(
+        "\n".join(
+            [
+                "稼働中です。",
+                f"mode: {mode}",
+                f"hf: {hf_state}",
+                f"model: {model}",
+                f"uptime: {uptime}",
+                f"active_sessions: {sessions}",
+            ]
+        )
+    )
 
 
 @bot.command(name="r", aliases=["reset"])
