@@ -2,12 +2,13 @@ import asyncio
 import os
 import random
 from collections import defaultdict, deque
-from threading import Thread
+from threading import Lock, Thread
+from uuid import uuid4
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from flask import Flask
+from flask import Flask, jsonify, request
 from huggingface_hub import InferenceClient
 
 load_dotenv()
@@ -24,6 +25,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 MAX_HISTORY = 6
 conversation_history = defaultdict(lambda: deque(maxlen=MAX_HISTORY * 2))
+history_lock = Lock()
 
 SYSTEM_PROMPT = """You are Aegis, a concise chat companion.
 Reply in Japanese in 1-2 short sentences (max 3).
@@ -32,12 +34,242 @@ Do not say you are ChatGPT, OpenAI, or a language model.
 Do not answer with only "...", "yes", or single-word replies.
 """
 
+CHAT_PAGE = """<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aegis Web Chat</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --line: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --user: #1d4ed8;
+      --bot: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Noto Sans JP", sans-serif;
+      background: radial-gradient(1000px 600px at 20% -10%, #1e293b, var(--bg));
+      color: var(--text);
+      min-height: 100svh;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+    .app {
+      width: min(720px, 100%);
+      height: min(86svh, 900px);
+      border: 1px solid var(--line);
+      background: color-mix(in oklab, var(--panel) 92%, black);
+      border-radius: 16px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: 0.2px;
+    }
+    .muted { color: var(--muted); font-size: 12px; }
+    #log {
+      overflow-y: auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg {
+      max-width: 82%;
+      line-height: 1.45;
+      padding: 10px 12px;
+      border-radius: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+    }
+    .user { align-self: flex-end; background: var(--user); }
+    .bot { align-self: flex-start; background: var(--bot); }
+    form {
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      padding: 10px;
+    }
+    input {
+      width: 100%;
+      background: #0b1220;
+      border: 1px solid var(--line);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 0 14px;
+      cursor: pointer;
+      color: white;
+      background: #0ea5e9;
+      font-weight: 600;
+    }
+    button.secondary { background: #475569; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Aegis Web Chat</h1>
+      <div class="muted" id="status">Ready</div>
+    </header>
+    <section id="log"></section>
+    <form id="chat-form">
+      <input id="msg" placeholder="ここに入力してEnter" autocomplete="off" />
+      <button id="send" type="submit">Send</button>
+      <button id="reset" class="secondary" type="button">Reset</button>
+    </form>
+  </main>
+
+  <script>
+    const log = document.getElementById("log");
+    const form = document.getElementById("chat-form");
+    const input = document.getElementById("msg");
+    const sendBtn = document.getElementById("send");
+    const resetBtn = document.getElementById("reset");
+    const statusEl = document.getElementById("status");
+
+    const storeKey = "aegis_session_id";
+    let sessionId = localStorage.getItem(storeKey) || "";
+
+    function append(role, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = text;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    async function sendMessage(message) {
+      sendBtn.disabled = true;
+      statusEl.textContent = "Thinking...";
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message, session_id: sessionId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Request failed");
+        sessionId = data.session_id || sessionId;
+        localStorage.setItem(storeKey, sessionId);
+        append("bot", data.reply);
+      } catch (err) {
+        append("bot", "Error: " + err.message);
+      } finally {
+        sendBtn.disabled = false;
+        statusEl.textContent = "Ready";
+        input.focus();
+      }
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const message = input.value.trim();
+      if (!message) return;
+      append("user", message);
+      input.value = "";
+      await sendMessage(message);
+    });
+
+    resetBtn.addEventListener("click", async () => {
+      const oldSession = sessionId;
+      sessionId = "";
+      localStorage.removeItem(storeKey);
+      if (!oldSession) {
+        append("bot", "Session reset.");
+        return;
+      }
+      await fetch("/api/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: oldSession }),
+      });
+      append("bot", "Session reset.");
+    });
+
+    append("bot", "Web chat is ready. Say something.");
+    input.focus();
+  </script>
+</body>
+</html>
+"""
+
 app = Flask(__name__)
+
+
+@app.get("/")
+def index() -> str:
+    return CHAT_PAGE
 
 
 @app.get("/health")
 def health() -> tuple[str, int]:
     return "ok", 200
+
+
+@app.post("/api/chat")
+def api_chat() -> tuple[object, int] | object:
+    payload = request.get_json(silent=True) or {}
+    message = str(payload.get("message", "")).strip()
+    session_id = str(payload.get("session_id", "")).strip()
+
+    if not message:
+        return jsonify({"error": "message is required"}), 400
+
+    if not session_id:
+        session_id = uuid4().hex[:12]
+
+    memory_key = f"web:{session_id}"
+
+    if client:
+        reply = asyncio.run(call_huggingface(memory_key, message))
+    else:
+        reply = fallback_reply()
+
+    return jsonify({"session_id": session_id, "reply": reply})
+
+
+@app.post("/api/reset")
+def api_reset() -> tuple[object, int] | object:
+    payload = request.get_json(silent=True) or {}
+    session_id = str(payload.get("session_id", "")).strip()
+
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+
+    memory_key = f"web:{session_id}"
+    with history_lock:
+        conversation_history.pop(memory_key, None)
+    return jsonify({"ok": True})
 
 
 def run_web() -> None:
@@ -89,7 +321,8 @@ async def generate_reply(
 
 
 async def call_huggingface(memory_key: str, user_input: str) -> str:
-    history = list(conversation_history[memory_key])
+    with history_lock:
+        history = list(conversation_history[memory_key])
 
     try:
         reply, finish_reason = await generate_reply(history, user_input)
@@ -104,14 +337,15 @@ async def call_huggingface(memory_key: str, user_input: str) -> str:
         if is_weak_reply(reply):
             return random.choice(
                 [
-                    "まあ、もう少し具体的に聞いてください。",
+                    "もう少し具体的に聞いてください。",
                     "その話、もう一歩だけ詳しく。",
                     "続けましょう。次は何を知りたいですか。",
                 ]
             )
 
-        conversation_history[memory_key].append({"role": "user", "content": user_input})
-        conversation_history[memory_key].append({"role": "assistant", "content": reply})
+        with history_lock:
+            conversation_history[memory_key].append({"role": "user", "content": user_input})
+            conversation_history[memory_key].append({"role": "assistant", "content": reply})
         return reply
 
     except Exception as exc:
@@ -152,7 +386,8 @@ async def chat_command(ctx: commands.Context, *, message: str) -> None:
 @bot.command(name="r", aliases=["reset"])
 async def reset_command(ctx: commands.Context) -> None:
     memory_key = f"channel:{ctx.channel.id}"
-    conversation_history.pop(memory_key, None)
+    with history_lock:
+        conversation_history.pop(memory_key, None)
     await ctx.send("このチャンネルの会話履歴をリセットしました。")
 
 
@@ -166,11 +401,12 @@ async def on_ready() -> None:
 
 
 def main() -> None:
-    if not DISCORD_TOKEN:
-        raise SystemExit("DISCORD_TOKEN is missing")
-
-    Thread(target=run_web, daemon=True).start()
-    bot.run(DISCORD_TOKEN)
+    if DISCORD_TOKEN:
+        Thread(target=run_web, daemon=True).start()
+        bot.run(DISCORD_TOKEN)
+    else:
+        print("No DISCORD_TOKEN found. Starting in web-chat-only mode.")
+        run_web()
 
 
 if __name__ == "__main__":

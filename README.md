@@ -1,11 +1,21 @@
 # discordbot
 
 Render-ready Discord bot using `discord.py` + Hugging Face Inference.
+You can also chat directly in the browser (no Discord client needed).
 
 ## Commands
 
 - `!c <message>`: chat with the bot
 - `!r`: reset channel memory
+
+## Web Chat
+
+- Open `https://<your-render-service>.onrender.com/`
+- Chat directly from browser (desktop or smartphone)
+- Health check endpoint: `/health`
+- API endpoint: `POST /api/chat` with JSON:
+  - `message` (required)
+  - `session_id` (optional, for conversation continuity)
 
 ## Environment Variables
 
